@@ -1,4 +1,4 @@
-# Openwrt-for-N1 官方
+# Openwrt-for-N1
 
 https://github.com/openwrt/openwrt
 
