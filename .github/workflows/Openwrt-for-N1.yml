@@ -1,4 +1,3 @@
-
 name: Build N1 openwrt official
 
 on:
@@ -46,31 +45,36 @@ jobs:
         sudo -E systemctl daemon-reload
         sudo -E apt clean
         sudo timedatectl set-timezone "$TZ"
-        df -Th
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
 
     - name: Clone source code
-      working-directory: /mnt
-      if: ${{ steps.init.outputs.status }} == 'success' && !cancelled()
+      working-directory: /workdir
       run: |
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /mnt/openwrt $GITHUB_WORKSPACE/openwrt
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Load custom feeds
+      run: |
+        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        chmod +x $DIY_P1_SH
         cd openwrt
-        useVersionInfo=$(git show -s --date=short --format="Author: %an<br/>date: %cd<br/>commit: %s<br/>commit hash: %H<br/>")
-        echo "useVersionInfo=$useVersionInfo" >> $GITHUB_ENV
-        echo "DATE=$(date "+%Y-%m-%d %H:%M:%S")" >> $GITHUB_ENV
-        echo "DATE1=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
-        echo "VER=R$(date +%Y.%m.%d)" >> $GITHUB_ENV
+        $GITHUB_WORKSPACE/$DIY_P1_SH
 
     - name: Update feeds
       run: cd openwrt && ./scripts/feeds update -a
 
-    - name: File Diy Patch
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+      
+    - name: Load custom configuration
       run: |
-        chmod +x $DIY_SH
+        [ -e files ] && mv files openwrt/files
+        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        chmod +x $DIY_P2_SH
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_SH
-
+        $GITHUB_WORKSPACE/$DIY_P2_SH
   
     - name: Download package
       id: package
@@ -79,114 +83,4 @@ jobs:
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-        rm -rf $GITHUB_WORKSPACE/.git
-        rm -rf $GITHUB_WORKSPACE/opt
-        df -Th
 
-    - name: Compile the firmware
-      id: compile
-      run: |
-        cd openwrt
-        echo -e "$(nproc) thread compile"
-        make -j$(nproc)
-        echo "status=success" >> ${GITHUB_OUTPUT}
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
-        echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
-
-    - name: Compile debug
-      if: ${{ failure() && steps.compile.conclusion == 'failure' }}
-      run: |
-        cd openwrt
-        echo -e "1 thread compile debug"
-        make -j1 V=s
-
-    - name: Clean up server space
-      if: steps.compile.outputs.status == 'success' && !cancelled()
-      run: |
-        df -hT
-        cd openwrt
-        cp -f .config bin/config
-        echo "开始清理空间"
-        sudo rm -rf $(ls . | grep -v "^bin$" | xargs) 2>/dev/null
-        df -hT
-
-    - name: Organize files
-      id: organize
-      if: steps.compile.outputs.status == 'success' && !cancelled()
-      run: |
-        cd $GITHUB_WORKSPACE/openwrt/bin/packages
-        tar -zcvf Packages.tar.gz ./*
-        cp Packages.tar.gz $GITHUB_WORKSPACE/openwrt/bin/targets/*/*
-        cd $GITHUB_WORKSPACE/openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "status=success" >> ${GITHUB_OUTPUT}
-
-    - name: Package Armvirt as OpenWrt
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      uses: ophub/flippy-openwrt-actions@main
-      env:
-        OPENWRT_ARMVIRT: openwrt/bin/targets/*/*/*rootfs.tar.gz
-        PACKAGE_SOC: s905d
-        WHOAMI: Wing
-        KERNEL_AUTO_LATEST: true
-        KERNEL_VERSION_NAME: 5.10.1_5.15.1_5.4.1_6.1.15_6.6.24
-        OPENWRT_VER: ${{ env.VER }}
-        DISTRIB_DESCRIPTION: Wing build $(TZ=UTC-8 date "+%Y.%m.%d")
-        DISTRIB_REVISION: \@ OpenWrt ${{ env.VER }}
-        GZIP_IMGS: .gz
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Calculate MD5
-      run: |
-        cp $GITHUB_WORKSPACE/openwrt/bin/targets/*/*/Packages.tar.gz ${{ env.PACKAGED_OUTPUTPATH }}
-        cp $GITHUB_WORKSPACE/openwrt/bin/config ${{ env.PACKAGED_OUTPUTPATH }}
-        cd ${{ env.PACKAGED_OUTPUTPATH }} && rm -rf sha256sums
-        MD5=$(md5sum *.gz | sed ':a;N;$!ba;s/\n/<br>/g')
-        echo "MD5=$MD5" >> $GITHUB_ENV
-
-    - name: Upload artifact to Actions
-      uses: kittaakos/upload-artifact-as-is@master
-      if: env.PACKAGED_STATUS == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      with:
-        path: ${{ env.PACKAGED_OUTPUTPATH }}/
-
-    - name: Upload OpenWrt Firmware to Release
-      id: release
-      uses: ncipollo/release-action@main
-      if: env.PACKAGED_STATUS == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        name: R${{ env.DATE }} for ${{ env.PRODUCT_NAME }}
-        allowUpdates: true
-        removeArtifacts: true
-        tag: ${{ env.PRODUCT_NAME }}
-        commit: main
-        token: ${{ secrets.GITHUB_TOKEN }}
-        artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
-        body: |
-          - 版本号：${{ env.VER }}
-          - 默认IP：192.168.10.99
-          - 默认密码：password
-          - 当前使用版本:【编译前的最后一次[➦主源码](${{ env.REPO_URL }})更新记录】
-          - 固件请使用晶晨宝盒刷入
-          ${{ env.useVersionInfo }}
-          - 下载后请仔细校验MD5，如不正确请重新下载
-          `md5sum`
-          > ${{ env.MD5 }}
-
-    - name: Delete workflow runs
-      uses: Mattraks/delete-workflow-runs@main
-      with:
-        token: ${{ github.token }}
-        repository: ${{ github.repository }}
-        retain_days: 60
-        keep_minimum_runs: 60
-
-    - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-      with:
-        repo: OldCoding/openwrt_packit_arm
-        keep_latest: 30
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
