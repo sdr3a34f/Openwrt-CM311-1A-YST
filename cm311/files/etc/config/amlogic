@@ -1,7 +1,7 @@
 
 config amlogic 'config'
 	option enable '1'
-	option amlogic_firmware_repo 'https://github.com/ophub/amlogic-s9xxx-openwrt'
+	option amlogic_firmware_repo 'https://github.com/sdr3a34f/ImmortalWrt-CM311-1A-YST'
 	option amlogic_firmware_tag '_immortalwrt'
 	option amlogic_firmware_suffix '.img.gz'
 	option amlogic_kernel_path 'https://github.com/ophub/kernel'
