@@ -6,7 +6,6 @@ config interface 'loopback'
 	option netmask '255.0.0.0'
 
 config globals 'globals'
-	option ula_prefix 'fd61:ac73:7a8a::/48'
 
 config device
 	option name 'br-lan'
@@ -18,8 +17,9 @@ config interface 'lan'
 	option proto 'static'
 	option ipaddr '192.168.10.99'
 	option netmask '255.255.255.0'
-	option ip6assign '60'
+	option ip6assign '64'
 	option gateway '192.168.10.1'
+	list dns '192.168.10.1'
 
 config interface 'docker'
 	option device 'docker0'
